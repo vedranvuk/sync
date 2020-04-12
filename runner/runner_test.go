@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const unit = 100 * time.Millisecond
+const unit = 10 * time.Millisecond
 
 var errTest = fmt.Errorf("test error")
 
@@ -240,16 +240,20 @@ func TestMixedStopIn2WithTimeoutIn1(t *testing.T) {
 
 func TestBusyRun(t *testing.T) {
 	runner := New()
-	runner.Register(makeBlockFunc("1", 1*unit))
+	runner.Register(makeBlockFunc("1", 3*unit))
 	go func() {
 		time.Sleep(2 * unit)
+		fmt.Println("-> stop")
 		if err := runner.Run(nil); err != nil && !errors.Is(err, ErrRunBusy) {
 			t.Fatal(err)
 		}
+		fmt.Println("<- busy")
 	}()
+	fmt.Println("-> run")
 	if err := runner.Run(nil); err != nil {
 		t.Fatal(err)
 	}
+	fmt.Println("<- done")
 }
 
 func TestBusyStop(t *testing.T) {
@@ -257,17 +261,23 @@ func TestBusyStop(t *testing.T) {
 	runner.Register(makeBlockFunc("1", 3*unit))
 	go func() {
 		time.Sleep(1 * unit)
+		fmt.Println("-> stop")
 		if err := runner.Stop(nil); err != nil && !errors.Is(err, ErrStopBusy) {
 			t.Fatal(err)
 		}
+		fmt.Println("<- busy")
 	}()
 	go func() {
 		time.Sleep(2 * unit)
+		fmt.Println("-> stop")
 		if err := runner.Stop(nil); err != nil && !errors.Is(err, ErrStopBusy) {
 			t.Fatal(err)
 		}
+		fmt.Println("<- busy")
 	}()
+	fmt.Println("-> run")
 	if err := runner.Run(nil); err != nil {
 		t.Fatal(err)
 	}
+	fmt.Println("<- done")
 }

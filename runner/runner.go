@@ -204,6 +204,10 @@ func (r *Runner) run(ctx context.Context) (err error) {
 			eex.Extra(e)
 		}
 		err = eex
+	} else {
+		if r.stopReason == ReasonUserAbort {
+			defer func() { r.errors <- nil }()
+		}
 	}
 	r.stopReason = ReasonNone
 
@@ -248,6 +252,8 @@ func (r *Runner) stop(ctx context.Context) {
 	deadline, ok := ctx.Deadline()
 	if ok {
 		r.timeout = time.After(time.Until(deadline))
+	} else {
+		panic("no context deadline set")
 	}
 	for _, info := range r.funcs {
 		go func(stop StopChan) {
