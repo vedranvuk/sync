@@ -27,32 +27,9 @@ import (
 // all routines currently running alongside the goroutine that errored.
 type RunFunc func(name string, stop StopChan, result ResultChan)
 
-// StopReason is the reason why a RunFunc is being requested to stop.
-// RunFuncs can use this value to determine how to shut down.
-type StopReason byte
-
-// String implements Stringer interface on StopReason.
-func (sr StopReason) String() (result string) {
-	switch sr {
-	case ReasonNone:
-		result = "NoReason"
-	case ReasonUserAbort:
-		result = "UserAbort"
-	case ReasonError:
-		result = "Error"
-	}
-	return
-}
-
-const (
-	// ReasonNone is the undefined reason.
-	ReasonNone StopReason = iota
-	// ReasonUserAbort specifies that the user requested the Runner to stop.
-	ReasonUserAbort
-	// ReasonError specifies that the RunFunc must stop due to an error.
-	// In this case RunFunc should shut down as quickly as possible.
-	ReasonError
-)
+// StopChan is a chan of *StopRequest.
+// It is passed to a RunFunc which must stop when StopChan becomes readable.
+type StopChan chan *StopRequest
 
 // StopRequest is a stop request sent to a RunFunc.
 type StopRequest struct {
@@ -63,13 +40,37 @@ type StopRequest struct {
 	Context context.Context
 }
 
-// StopChan is a chan of *StopRequest.
-// It is given to a RunFunc which must stop when StopChan becomes readable.
-type StopChan chan *StopRequest
-
 // ResultChan is a chan of error.
-// It is written to by a RunFunc when it exits.
+// It is written to by a RunFunc when it exits. A non-nil value indicates an
+// error and causes Runner to stop all other running RunFuncs.
 type ResultChan chan error
+
+// StopReason is the reason why a RunFunc is being requested to stop.
+// RunFuncs can use this value to determine how to shut down.
+type StopReason byte
+
+const (
+	// ReasonInvalid is the undefined/invalid reason.
+	ReasonInvalid StopReason = iota
+	// ReasonUserAbort specifies that the user requested the Runner to stop.
+	ReasonUserAbort
+	// ReasonError specifies that the RunFunc must stop due to an error.
+	// In this case RunFunc should shut down as quickly as possible.
+	ReasonError
+)
+
+// String implements Stringer interface on StopReason.
+func (sr StopReason) String() (result string) {
+	switch sr {
+	case ReasonInvalid:
+		result = "Invalid"
+	case ReasonUserAbort:
+		result = "UserAbort"
+	case ReasonError:
+		result = "Error"
+	}
+	return
+}
 
 var (
 	// ErrRunner is the base error of runner package.
@@ -98,7 +99,7 @@ type runFuncInfo struct {
 	RunFunc
 }
 
-// Runner runs multiple RunFuncs in parallel as a single function.
+// Runner runs multiple RunFuncs in parallel as a single process.
 type Runner struct {
 	mu         sync.Mutex
 	running    bool
@@ -113,7 +114,7 @@ func New() *Runner {
 	return &Runner{
 		sync.Mutex{},
 		false,
-		ReasonNone,
+		ReasonInvalid,
 		make(<-chan time.Time),
 		make(chan error),
 		make(map[string]*runFuncInfo),
@@ -165,13 +166,12 @@ func (r *Runner) run(ctx context.Context) (err error) {
 	var errors []error
 	for r.running = true; r.running; {
 		select {
-
 		case result := <-results:
 			wgroup.Done()
 			if result == nil {
 				continue
 			}
-			if r.stopReason == ReasonNone {
+			if r.stopReason == ReasonInvalid {
 				err = result
 				r.stopReason = ReasonError
 				deadline, ok := ctx.Deadline()
@@ -181,7 +181,6 @@ func (r *Runner) run(ctx context.Context) (err error) {
 				r.stop(ctx)
 			}
 			errors = append(errors, result)
-
 		case <-wgdone:
 			r.running = false
 		case <-r.timeout:
@@ -209,7 +208,7 @@ func (r *Runner) run(ctx context.Context) (err error) {
 			defer func() { r.errors <- nil }()
 		}
 	}
-	r.stopReason = ReasonNone
+	r.stopReason = ReasonInvalid
 
 	return
 }
@@ -234,7 +233,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		defer r.mu.Unlock()
 		return ErrRunBusy.Wrap("already running")
 	}
-	if r.stopReason != ReasonNone {
+	if r.stopReason != ReasonInvalid {
 		defer r.mu.Unlock()
 		return ErrRunBusy.Wrap("cannot run, stopping")
 	}
@@ -273,7 +272,7 @@ func (r *Runner) stop(ctx context.Context) {
 // in Extras() that occured during the shutdown.
 func (r *Runner) Stop(ctx context.Context) (err error) {
 	r.mu.Lock()
-	if r.stopReason != ReasonNone {
+	if r.stopReason != ReasonInvalid {
 		defer r.mu.Unlock()
 		return ErrStopBusy.Wrap("already stopping")
 	}
